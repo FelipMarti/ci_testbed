@@ -1,0 +1,96 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  full-suite:
+    name: Full suite with retries
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install project
+        run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - name: Run every non-hardware test with flake retries
+        run: >
+          pytest -n auto
+          -m "not docker and not hardware"
+          --reruns 2 --reruns-delay 1
+          --timeout=180
+          --durations=20
+          --log-file=reports/pytest-nightly.log
+          --junitxml=reports/junit-nightly.xml
+          --cov=ci_testbed
+          --cov-report=xml:reports/coverage-nightly.xml
+          --cov-report=html:reports/htmlcov
+      - name: Generate nightly simulation result
+        if: always()
+        run: >
+          python -m ci_testbed.cli
+          --target-x 0.34 --target-y 0.28
+          --noise-std 0.01
+          --camera-faults 1
+          --output reports/nightly-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-reports
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 30
+
+  docker_mocks:
+    name: Docker mock services (future)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ vars.ENABLE_DOCKER_JOBS == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install project
+        run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - name: Start mock services
+        run: docker compose -f docker/docker-compose.yml up -d --wait
+      - name: Run docker-marked tests
+        run: >
+          pytest -m docker
+          --reruns 2 --reruns-delay 1
+          --timeout=180
+          --log-file=reports/pytest-nightly-docker.log
+          --junitxml=reports/junit-nightly-docker.xml
+      - name: Collect container logs
+        if: always()
+        run: docker compose -f docker/docker-compose.yml logs > reports/docker-nightly.log
+      - name: Stop mock services
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-docker-logs
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 30

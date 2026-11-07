@@ -1,0 +1,256 @@
+name: PR CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lint:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/cache@v4
+        with:
+          path: .ruff_cache
+          key: ruff-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ruff-${{ runner.os }}-py3.12-
+      - name: Install project
+        run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/cache@v4
+        with:
+          path: .mypy_cache
+          key: mypy-${{ runner.os }}-py3.12-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            mypy-${{ runner.os }}-py3.12-
+      - name: Install project
+        run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - run: mypy src
+
+  unit:
+    name: Unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install project
+        run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - name: Run unit tests in parallel
+        run: >
+          pytest -m unit -n auto
+          --timeout=30
+          --durations=20
+          --log-file=reports/pytest-unit-py${{ matrix.python-version }}.log
+          --junitxml=reports/junit-unit-${{ matrix.python-version }}.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-unit-reports-py${{ matrix.python-version }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  integration:
+    name: Integration and contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [lint, typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install project
+        run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - name: Run integration and contract tests
+        run: >
+          pytest -m "integration or contract" -n auto
+          --reruns 1 --reruns-delay 1
+          --timeout=60
+          --durations=20
+          --log-file=reports/pytest-integration.log
+          --junitxml=reports/junit-integration.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-integration-reports
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  system:
+    name: System tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint, typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install project
+        run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - name: Run system tests
+        run: >
+          pytest -m system
+          --reruns 2 --reruns-delay 1
+          --timeout=120
+          --durations=20
+          --log-file=reports/pytest-system.log
+          --junitxml=reports/junit-system.xml
+      - name: Generate simulation result artifact
+        if: always()
+        run: >
+          python -m ci_testbed.cli
+          --target-x 0.34 --target-y 0.28
+          --output reports/system-result.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-system-reports
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  coverage:
+    name: Coverage gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [unit, integration, system]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install project
+        run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - name: Run full suite with coverage
+        run: >
+          pytest -n auto
+          -m "not docker and not hardware"
+          --timeout=120
+          --durations=20
+          --log-file=reports/pytest-coverage.log
+          --cov=ci_testbed
+          --cov-report=term-missing
+          --cov-report=xml:reports/coverage.xml
+          --cov-report=html:reports/htmlcov
+          --junitxml=reports/junit-all.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-coverage-reports
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  docker_e2e:
+    name: Docker mock E2E (future)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [lint, typecheck]
+    if: ${{ vars.ENABLE_DOCKER_JOBS == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install project
+        run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - name: Start mock services
+        run: docker compose -f docker/docker-compose.yml up -d --wait
+      - name: Run docker-marked tests
+        run: >
+          pytest -m docker
+          --timeout=120
+          --log-file=reports/pytest-docker.log
+          --junitxml=reports/junit-docker.xml
+      - name: Collect container logs
+        if: always()
+        run: docker compose -f docker/docker-compose.yml logs > reports/docker-compose.log
+      - name: Stop mock services
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-docker-logs
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  pr_summary:
+    name: PR CI summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [lint, typecheck, unit, integration, system, coverage, docker_e2e]
+    steps:
+      - name: Write job summary
+        run: |
+          {
+            echo "## PR CI results"
+            echo ""
+            echo "| Job | Result |"
+            echo "| --- | --- |"
+            echo "| Lint | ${{ needs.lint.result }} |"
+            echo "| Typecheck | ${{ needs.typecheck.result }} |"
+            echo "| Unit | ${{ needs.unit.result }} |"
+            echo "| Integration | ${{ needs.integration.result }} |"
+            echo "| System | ${{ needs.system.result }} |"
+            echo "| Coverage | ${{ needs.coverage.result }} |"
+            echo "| Docker E2E | ${{ needs.docker_e2e.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Fail if any required job failed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
