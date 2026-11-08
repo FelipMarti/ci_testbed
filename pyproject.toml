@@ -7,7 +7,7 @@ name = "ci-testbed"
 version = "0.1.0"
 description = "CI testbed with pytest and GitHub Actions." 
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 dependencies = ["numpy>=1.26"]
 
@@ -78,7 +78,7 @@ ignore = ["PT011"]
 "tests/**" = ["PT006"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 strict = true
 warn_unused_ignores = true
 show_error_codes = true
