@@ -103,10 +103,13 @@ jobs:
           retention-days: 30
 
   docker_mocks:
-    name: Docker mock services (future)
+    name: Docker mock services
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: ${{ vars.ENABLE_DOCKER_JOBS == 'true' }}
+    env:
+      CI_TESTBED_MOCKS_IMAGE: ci-testbed-mocks:local
+      CI_TESTBED_SKIP_BUILD: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -116,21 +119,26 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install project
         run: pip install --retries 5 --timeout 60 -e ".[dev]"
-      - name: Start mock services
-        run: docker compose -f docker/docker-compose.yml up -d --wait
-      - name: Run docker-marked tests
+      - uses: docker/setup-buildx-action@v3
+      - name: Build mock image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.CI_TESTBED_MOCKS_IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Create reports directory
+        run: mkdir -p reports
+      - name: Run docker-marked tests with flake retries
         run: >
           pytest -m docker
           --reruns 2 --reruns-delay 1
           --timeout=180
           --log-file=reports/pytest-nightly-docker.log
           --junitxml=reports/junit-nightly-docker.xml
-      - name: Collect container logs
-        if: always()
-        run: docker compose -f docker/docker-compose.yml logs > reports/docker-nightly.log
-      - name: Stop mock services
-        if: always()
-        run: docker compose -f docker/docker-compose.yml down -v
       - uses: actions/upload-artifact@v7
         if: always()
         with:
