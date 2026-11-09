@@ -16,14 +16,27 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
-  full-suite:
+  full_suite:
     name: Full suite with retries
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
+    outputs:
+      flaky: ${{ steps.tests.outputs.flaky }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - name: Verify repository layout
+        run: |
+          for path in pyproject.toml src/ci_testbed tests; do
+            if [ ! -e "$path" ]; then
+              echo "::error title=Missing project file::$path is missing; nightly cannot run."
+              exit 1
+            fi
+          done
+          if ! find tests -name 'test_*.py' -print -quit | grep -q .; then
+            echo "::error title=No tests found::No test_*.py files under tests."
+            exit 1
+          fi
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -31,26 +44,57 @@ jobs:
       - name: Install project
         run: pip install --retries 5 --timeout 60 -e ".[dev]"
       - name: Run every non-hardware test with flake retries
-        run: >
-          pytest -n auto
-          -m "not docker and not hardware"
-          --reruns 2 --reruns-delay 1
-          --timeout=180
-          --durations=20
-          --log-file=reports/pytest-nightly.log
-          --junitxml=reports/junit-nightly.xml
-          --cov=ci_testbed
-          --cov-report=xml:reports/coverage-nightly.xml
-          --cov-report=html:reports/htmlcov
-      - name: Generate nightly simulation result
+        id: tests
+        shell: bash
+        run: |
+          mkdir -p reports
+          set +e
+          pytest -n auto \
+            -m "not docker and not hardware" \
+            --reruns 2 --reruns-delay 1 \
+            --timeout=180 \
+            --durations=20 \
+            -raR --color=no \
+            --junitxml=reports/junit-nightly.xml \
+            --cov=ci_testbed \
+            --cov-report=xml:reports/coverage-nightly.xml \
+            --cov-report=html:reports/htmlcov \
+            2>&1 | tee reports/pytest-nightly.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "pytest_exit=$status" >> "$GITHUB_OUTPUT"
+            exit "$status"
+          fi
+          grep -E '^RERUN ' reports/pytest-nightly.log \
+            | sed -E 's/^RERUN //' | sort -u > reports/flaky-tests.txt || true
+          if [ -s reports/flaky-tests.txt ]; then
+            echo "flaky=true" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Flaky tests detected::$(wc -l < reports/flaky-tests.txt) test(s) passed only after reruns."
+          else
+            echo "flaky=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify test reports
         if: always()
+        run: |
+          test -s reports/junit-nightly.xml
+          test -s reports/coverage-nightly.xml
+      - name: Add flaky tests to summary
+        if: always() && steps.tests.outputs.flaky == 'true'
+        run: |
+          {
+            echo "## Flaky tests"
+            echo ""
+            sed 's/^/- /' reports/flaky-tests.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Generate nightly simulation result
+        if: success()
         run: >
           python -m ci_testbed.cli
           --target-x 0.34 --target-y 0.28
           --noise-std 0.01
           --camera-faults 1
           --output reports/nightly-result.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nightly-reports
@@ -64,8 +108,8 @@ jobs:
     timeout-minutes: 30
     if: ${{ vars.ENABLE_DOCKER_JOBS == 'true' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -87,10 +131,35 @@ jobs:
       - name: Stop mock services
         if: always()
         run: docker compose -f docker/docker-compose.yml down -v
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nightly-docker-logs
           path: reports/
           if-no-files-found: warn
           retention-days: 30
+
+  nightly_summary:
+    name: Nightly summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [full_suite, docker_mocks]
+    steps:
+      - name: Write summary
+        run: |
+          {
+            echo "## Nightly results"
+            echo ""
+            echo "| Job | Result |"
+            echo "| --- | --- |"
+            echo "| Full suite | ${{ needs.full_suite.result }} |"
+            echo "| Docker mocks | ${{ needs.docker_mocks.result }} |"
+            echo "| Flaky tests | ${{ needs.full_suite.outputs.flaky == 'true' && '⚠️ yes' || 'no' }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ needs.full_suite.outputs.flaky }}" = "true" ]; then
+            echo "::warning title=Nightly flakiness::Tests passed only after reruns; inspect the nightly-reports artifact."
+          fi
+      - name: Fail on hard failures
+        if: needs.full_suite.result != 'success' || needs.docker_mocks.result == 'failure' || needs.docker_mocks.result == 'cancelled'
+        run: exit 1

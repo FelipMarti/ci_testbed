@@ -21,14 +21,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
       - name: Install project
         run: pip install --retries 5 --timeout 60 -e ".[dev]"
+      - name: Create reports directory
+        run: mkdir -p reports
       - name: Run full suite with coverage
         run: >
           pytest -n auto
@@ -37,11 +39,12 @@ jobs:
           --durations=20
           --log-file=reports/pytest-main.log
           --cov=ci_testbed
+          --cov-fail-under=85
           --cov-report=term-missing
           --cov-report=xml:reports/coverage-main.xml
           --cov-report=html:reports/htmlcov
           --junitxml=reports/junit-main.xml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: main-test-reports
@@ -54,8 +57,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -63,7 +66,7 @@ jobs:
       - name: Install build tooling
         run: pip install --retries 5 --timeout 60 build
       - run: python -m build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: main-dist
           path: dist/
@@ -80,7 +83,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -109,7 +112,7 @@ jobs:
       - name: Stop mock services
         if: always()
         run: docker compose -f docker/docker-compose.yml down -v
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: main-docker-logs
