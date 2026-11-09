@@ -82,10 +82,10 @@ jobs:
     permissions:
       contents: read
       packages: write
-    env:
-      IMAGE_NAME: ghcr.io/${{ github.repository }}/ci-testbed-mocks
     steps:
       - uses: actions/checkout@v7
+      - name: Normalize image name
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}/ci-testbed-mocks" >> "$GITHUB_ENV"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"

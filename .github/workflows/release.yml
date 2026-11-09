@@ -54,9 +54,9 @@ jobs:
     permissions:
       contents: read
       packages: write
-    env:
-      IMAGE_NAME: ghcr.io/${{ github.repository }}/ci-testbed-mocks
     steps:
+      - name: Normalize image name
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}/ci-testbed-mocks" >> "$GITHUB_ENV"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
