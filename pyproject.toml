@@ -39,14 +39,15 @@ ci_testbed = ["py.typed"]
 minversion = "8.0"
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = ["-ra", "--strict-markers", "--strict-config"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not docker and not hardware"]
 markers = [
   "unit: fast, isolated tests with no external I/O",
   "integration: tests that combine a few real in-process components",
   "system: full pick-and-place pipeline tests",
   "contract: shared behaviour expected from every adapter implementation",
   "slow: tests that are too slow for the default PR pipeline",
-  "docker: tests that require the future docker mock services",
+  "docker: tests that require the containerised mock services",
+  "smoke: fast end-to-end checks for a freshly built container image",
   "hardware: tests that require a self-hosted ROS2 or hardware runner",
 ]
 filterwarnings = ["error"]

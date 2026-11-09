@@ -1,0 +1,64 @@
+name: ci-testbed-mocks
+
+x-mock-base: &mock-base
+  image: ${CI_TESTBED_MOCKS_IMAGE:-ci-testbed-mocks:local}
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  init: true
+  stop_grace_period: 2s
+
+services:
+  camera-mock:
+    <<: *mock-base
+    command: ["camera", "--port", "8001"]
+    ports:
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  robot-mock:
+    <<: *mock-base
+    command: ["robot", "--port", "8002"]
+    ports:
+      - "127.0.0.1:8002:8002"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=2)",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
+  lidar-mock:
+    <<: *mock-base
+    command: ["lidar", "--port", "8003"]
+    ports:
+      - "127.0.0.1:8003:8003"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=2)",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s

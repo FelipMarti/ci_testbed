@@ -108,7 +108,7 @@ jobs:
         run: pip install --retries 5 --timeout 60 -e ".[dev]"
       - name: Run integration and contract tests
         run: >
-          pytest -m "integration or contract" -n auto
+          pytest -m "(integration or contract) and not docker" -n auto
           --reruns 1 --reruns-delay 1
           --timeout=60
           --durations=20
@@ -196,11 +196,14 @@ jobs:
           retention-days: 14
 
   docker_e2e:
-    name: Docker mock E2E (future)
+    name: Docker mock services
     runs-on: ubuntu-latest
     timeout-minutes: 25
     needs: [lint, typecheck]
     if: ${{ vars.ENABLE_DOCKER_JOBS == 'true' }}
+    env:
+      CI_TESTBED_MOCKS_IMAGE: ci-testbed-mocks:local
+      CI_TESTBED_SKIP_BUILD: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -210,20 +213,25 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install project
         run: pip install --retries 5 --timeout 60 -e ".[dev]"
-      - name: Start mock services
-        run: docker compose -f docker/docker-compose.yml up -d --wait
+      - uses: docker/setup-buildx-action@v3
+      - name: Build mock image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: true
+          tags: ${{ env.CI_TESTBED_MOCKS_IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Create reports directory
+        run: mkdir -p reports
       - name: Run docker-marked tests
         run: >
           pytest -m docker
           --timeout=120
           --log-file=reports/pytest-docker.log
           --junitxml=reports/junit-docker.xml
-      - name: Collect container logs
-        if: always()
-        run: docker compose -f docker/docker-compose.yml logs > reports/docker-compose.log
-      - name: Stop mock services
-        if: always()
-        run: docker compose -f docker/docker-compose.yml down -v
       - uses: actions/upload-artifact@v7
         if: always()
         with:
